@@ -44,6 +44,13 @@ subdirectory structure:
 bank-statement-parser ./statements --output ./activity-csv --recursive
 ```
 
+Add `--merge` to also write all successfully converted transactions to a
+single `merged.csv` in the output directory. Individual CSVs are still created:
+
+```sh
+bank-statement-parser ./statements --year 2025 --merge
+```
+
 Directory conversion processes all PDFs even if one is invalid. It reports a
 summary and exits with a nonzero status if any files fail; PDFs with no
 transaction rows still get an empty CSV with the normal header.

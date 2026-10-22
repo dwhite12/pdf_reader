@@ -174,6 +174,46 @@ class ParseTransactionTextTests(unittest.TestCase):
             self.assertEqual(result, 0)
             self.assertTrue((output_dir / "2025" / "january.csv").is_file())
 
+    def test_directory_conversion_writes_merged_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source_dir = Path(temporary_directory) / "statements"
+            output_dir = Path(temporary_directory) / "csv"
+            source_dir.mkdir()
+            for filename, row in (
+                ("first.pdf", "01/02/2025 COFFEE SHOP -4.50"),
+                ("second.pdf", "01/03/2025 PAYROLL 100.00"),
+            ):
+                with pymupdf.open() as document:
+                    page = document.new_page()
+                    page.insert_text((72, 72), row)
+                    document.save(source_dir / filename)
+
+            stderr = StringIO()
+            with patch(
+                "sys.argv",
+                [
+                    "bank-statement-parser",
+                    str(source_dir),
+                    "--output",
+                    str(output_dir),
+                    "--merge",
+                    "--no-ocr",
+                ],
+            ), redirect_stderr(stderr):
+                result = main()
+
+            self.assertEqual(result, 0)
+            self.assertEqual(
+                (output_dir / "merged.csv").read_text().splitlines(),
+                [
+                    "date,description,amount",
+                    "2025-01-02,COFFEE SHOP,-4.50",
+                    "2025-01-03,PAYROLL,100.00",
+                ],
+            )
+            self.assertTrue((output_dir / "first.csv").is_file())
+            self.assertTrue((output_dir / "second.csv").is_file())
+
     def test_directory_conversion_continues_after_bad_pdf(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             source_dir = Path(temporary_directory) / "statements"
