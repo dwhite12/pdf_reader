@@ -16,6 +16,12 @@ _DATE = re.compile(
 _ANY_DATE = re.compile(
     r"\b(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4})\b"
 )
+_STATEMENT_PERIOD = re.compile(
+    r"\bOpening\s*/\s*Closing\s+Date\s+"
+    r"(?P<start>\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s*[-–—]\s*"
+    r"(?P<end>\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
+    re.IGNORECASE,
+)
 _AMOUNT_AT_END = re.compile(
     r"(?P<amount>\(?-?\$?\d[\d,]*\.\d{2}\)?-?)(?:\s+(?P<direction>DR|CR))?\s*$",
     re.IGNORECASE,
@@ -32,6 +38,36 @@ class Transaction:
     date: date
     description: str
     amount: Decimal
+
+
+def _statement_period_from_text(text: str) -> tuple[date, date] | None:
+    for match in _STATEMENT_PERIOD.finditer(text):
+        try:
+            start = _date_from_text(match.group("start"), None)
+            end = _date_from_text(match.group("end"), None)
+        except ValueError:
+            continue
+        if start <= end:
+            return start, end
+    return None
+
+
+def _date_in_statement_period(
+    value: str, statement_period: tuple[date, date]
+) -> date | None:
+    start, end = statement_period
+    start_month = start.year * 12 + start.month
+    end_month = end.year * 12 + end.month
+    for year in range(start.year, end.year + 1):
+        date_text = f"{value}/{year}" if "/" in value else f"{value}-{year}"
+        try:
+            candidate = _date_from_text(date_text, None)
+        except ValueError:
+            continue
+        candidate_month = candidate.year * 12 + candidate.month
+        if start_month <= candidate_month <= end_month:
+            return candidate
+    return None
 
 
 def _date_from_text(value: str, statement_year: int | None) -> date:
@@ -98,6 +134,19 @@ def parse_transaction_text(
     text: str, *, statement_year: int | None = None
 ) -> list[Transaction]:
     """Extract transaction-shaped rows from text obtained from a statement."""
+    return _parse_transaction_text(
+        text,
+        statement_year=statement_year,
+        statement_period=_statement_period_from_text(text),
+    )
+
+
+def _parse_transaction_text(
+    text: str,
+    *,
+    statement_year: int | None,
+    statement_period: tuple[date, date] | None,
+) -> list[Transaction]:
     inferred_year = statement_year
     if inferred_year is None:
         for match in _ANY_DATE.finditer(text):
@@ -133,7 +182,13 @@ def parse_transaction_text(
         if re.search(r"(?:19|20)\d{2}", transaction_date_text):
             row_year = None
         try:
-            transaction_date = _date_from_text(transaction_date_text, row_year)
+            transaction_date = (
+                _date_in_statement_period(transaction_date_text, statement_period)
+                if statement_period is not None
+                else None
+            )
+            if transaction_date is None:
+                transaction_date = _date_from_text(transaction_date_text, row_year)
             amount = _amount_from_text(
                 amount_match.group("amount"), amount_match.group("direction")
             )
@@ -163,11 +218,11 @@ def parse_statement(
     transactions: list[Transaction] = []
     seen: set[tuple[date, str, Decimal]] = set()
     with pymupdf.open(path) as document:
+        pages: list[tuple[str, str | None]] = []
+        statement_text: list[str] = []
         for page in document:
             page_text = page.get_text("text", sort=True)
-            page_transactions = parse_transaction_text(
-                page_text, statement_year=statement_year
-            )
+            ocr_text = None
 
             if ocr and _has_substantial_images(page):
                 try:
@@ -177,10 +232,27 @@ def parse_statement(
                     raise RuntimeError(
                         "OCR failed. Install Tesseract OCR and ensure `tesseract` is on PATH."
                     ) from exc
-                page_transactions.extend(
-                    parse_transaction_text(ocr_text, statement_year=statement_year)
-                )
 
+            pages.append((page_text, ocr_text))
+            statement_text.append(page_text)
+            if ocr_text is not None:
+                statement_text.append(ocr_text)
+
+        statement_period = _statement_period_from_text("\n".join(statement_text))
+        for page_text, ocr_text in pages:
+            page_transactions = _parse_transaction_text(
+                page_text,
+                statement_year=statement_year,
+                statement_period=statement_period,
+            )
+            if ocr_text is not None:
+                page_transactions.extend(
+                    _parse_transaction_text(
+                        ocr_text,
+                        statement_year=statement_year,
+                        statement_period=statement_period,
+                    )
+                )
             for transaction in page_transactions:
                 key = (
                     transaction.date,
