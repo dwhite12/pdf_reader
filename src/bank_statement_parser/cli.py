@@ -30,6 +30,7 @@ def _convert_directory(
     recursive: bool,
     statement_year: int | None,
     ocr: bool,
+    merge: bool,
 ) -> int:
     pdf_paths = source_dir.rglob("*") if recursive else source_dir.iterdir()
     source_root = source_dir.resolve()
@@ -51,10 +52,22 @@ def _convert_directory(
     if not pdfs:
         print(f"No PDF files found in {source_dir}.", file=sys.stderr)
         return 1
+    if merge and any(
+        pdf_path.relative_to(source_dir).with_suffix(".csv").as_posix().casefold()
+        == "merged.csv"
+        for pdf_path in pdfs
+    ):
+        print(
+            "Error: --merge output would overwrite the CSV for merged.pdf.",
+            file=sys.stderr,
+        )
+        return 2
 
     converted = 0
     empty = 0
     failed = 0
+    merged_transactions: list[Transaction] = []
+    merged_output_failed = False
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -76,17 +89,30 @@ def _convert_directory(
             print(f"Error converting {pdf_path}: {exc}", file=sys.stderr)
             continue
 
+        if merge:
+            merged_transactions.extend(transactions)
         converted += 1
         if not transactions:
             empty += 1
         print(f"Converted {pdf_path} -> {csv_path}", file=sys.stderr)
+
+    if merge:
+        merged_path = output_dir / "merged.csv"
+        try:
+            with merged_path.open("w", newline="", encoding="utf-8") as output:
+                _write_transactions(output, merged_transactions)
+        except OSError as exc:
+            merged_output_failed = True
+            print(f"Error writing merged CSV {merged_path}: {exc}", file=sys.stderr)
+        else:
+            print(f"Merged CSV written to {merged_path}", file=sys.stderr)
 
     print(
         f"Finished: {converted} converted, {failed} failed, "
         f"{empty} with no transaction rows.",
         file=sys.stderr,
     )
-    return 2 if failed else 0
+    return 2 if failed or merged_output_failed else 0
 
 
 def main() -> int:
@@ -119,6 +145,11 @@ def main() -> int:
         action="store_true",
         help="Search subdirectories too when the input is a directory",
     )
+    parser.add_argument(
+        "--merge",
+        action="store_true",
+        help="Also write all successfully converted transactions to merged.csv (directory input only)",
+    )
     args = parser.parse_args()
 
     if args.input.is_dir():
@@ -135,7 +166,12 @@ def main() -> int:
             recursive=args.recursive,
             statement_year=args.statement_year,
             ocr=not args.no_ocr,
+            merge=args.merge,
         )
+
+    if args.merge:
+        print("Error: --merge can only be used with directory input.", file=sys.stderr)
+        return 2
 
     if not args.input.is_file():
         print(f"Error: input path does not exist: {args.input}", file=sys.stderr)
