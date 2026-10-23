@@ -65,6 +65,28 @@ class ParseTransactionTextTests(unittest.TestCase):
 
         self.assertEqual(transactions[0].date, date(2026, 1, 3))
 
+    def test_statement_period_resolves_years_across_new_year(self) -> None:
+        transactions = parse_transaction_text(
+            "Opening/Closing Date 12/20/18 - 01/19/19\n"
+            "12/21 XFER -10.00\n"
+            "01/02 COFFEE 4.00",
+            statement_year=2018,
+        )
+
+        self.assertEqual(
+            [transaction.date for transaction in transactions],
+            [date(2018, 12, 21), date(2019, 1, 2)],
+        )
+
+    def test_statement_period_matches_months_even_outside_day_range(self) -> None:
+        transactions = parse_transaction_text(
+            "Opening/Closing Date 12/20/18 - 01/19/19\n"
+            "12/19 XFER -10.00",
+            statement_year=2019,
+        )
+
+        self.assertEqual(transactions[0].date, date(2018, 12, 19))
+
     def test_rejects_row_without_a_resolvable_year(self) -> None:
         self.assertEqual(parse_transaction_text("01/03 COFFEE SHOP 4.25"), [])
 
@@ -88,6 +110,28 @@ class ParseTransactionTextTests(unittest.TestCase):
             self.assertEqual(
                 parse_statement(pdf_path, ocr=False),
                 [Transaction(date(2025, 1, 2), "COFFEE SHOP", Decimal("-4.50"))],
+            )
+
+    def test_statement_period_on_another_pdf_page_resolves_year(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            pdf_path = Path(temporary_directory) / "statement.pdf"
+            with pymupdf.open() as document:
+                first_page = document.new_page()
+                first_page.insert_text(
+                    (72, 72), "Opening/Closing Date 12/20/18 - 01/19/19"
+                )
+                second_page = document.new_page()
+                second_page.insert_text(
+                    (72, 72), "12/21 TRANSFER -10.00\n01/02 COFFEE 4.00"
+                )
+                document.save(pdf_path)
+
+            transactions = parse_statement(
+                pdf_path, statement_year=2018, ocr=False
+            )
+            self.assertEqual(
+                [transaction.date for transaction in transactions],
+                [date(2018, 12, 21), date(2019, 1, 2)],
             )
 
     def test_small_decorative_image_does_not_trigger_ocr(self) -> None:

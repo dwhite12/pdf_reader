@@ -70,9 +70,10 @@ for transaction in transactions:
     print(transaction.date, transaction.description, transaction.amount)
 ```
 
-`statement_year` is needed when the statement's transaction dates omit a year
-and the document does not include another full date from which the year can be
-inferred.
+When transaction dates omit a year, the parser uses an opening/closing date
+range in the statement when available, including across a New Year boundary.
+`statement_year` remains the fallback when no usable opening/closing date range
+is available.
 
 ## Supported row format
 
